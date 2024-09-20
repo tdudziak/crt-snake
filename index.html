@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>snek</title>
+    <style>
+        canvas {
+            display: block;
+            margin: 0 auto;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="glCanvas" width="700" height="700"></canvas>
+    <script>
+        const N = 32;
+        const BM = {
+            top: 1,
+            bot: 2,
+            left: 4,
+            right: 8,
+            c_small: 16,
+            c_big: 32,
+        };
+
+        let state = new Uint8Array(N * N);
+
+        function initState() {
+            state.fill(0);
+            state[5 * N + 5] = BM.c_big;
+            state[5 * N + 6] = 4 | 8 | BM.c_small;
+            state[5 * N + 7] = 4 | 8 | BM.c_small;
+            state[5 * N + 8] = 4 | 8 | BM.c_small;
+            state[5 * N + 9] = 4 | 1 | BM.c_small;
+            state[6 * N + 9] = 1 | 2 | BM.c_small;
+            state[7 * N + 9] = 1 | 2 | BM.c_small;
+            state[8 * N + 9] = 1 | 2 | BM.c_small;
+            state[9 * N + 9] = 2 | 8 | BM.c_small;
+            state[9 * N + 10] = 4;
+
+            for (let i = 0; i < N; i++) {
+                state[i] = state[i + N * (N - 1)] = BM.left | BM.right | BM.c_small;
+                state[i * N] = state[i * N + N - 1] = BM.top | BM.bot | BM.c_small;
+            }
+            state[0] = BM.top | BM.right | BM.c_small;
+            state[N - 1] = BM.top | BM.left | BM.c_small;
+            state[N * (N - 1)] = BM.bot | BM.right | BM.c_small;
+            state[N * N - 1] = BM.bot | BM.left | BM.c_small;
+        }
+
+        const vertexShaderSource = `#version 300 es
+            in vec2 position;
+            in vec2 texcoord;
+            out vec2 v_texcoord;
+            void main() {
+                gl_Position = vec4(position, 0.0, 1.0);
+                v_texcoord = texcoord;
+            }
+        `;
+
+        const fragmentShaderSource = `#version 300 es
+            precision mediump float;
+            precision mediump usampler2D;
+
+            uniform usampler2D state_texture;
+            uniform int N;
+            uniform float timestamp;
+            in vec2 v_texcoord;
+            out vec4 fragColor;
+
+            const vec2 narrow = vec2(0.3, 0.7);
+            const vec2 wide = vec2(0.2, 0.8);
+
+            void main() {
+                int bmask = int(texture(state_texture, v_texcoord).r);
+                vec2 off = fract(v_texcoord * float(N));
+
+                bool top = (bmask & 1) != 0;
+                bool bot = (bmask & 2) != 0;
+                bool left = (bmask & 4) != 0;
+                bool right = (bmask & 8) != 0;
+                bool c_small = (bmask & 16) != 0;
+                bool c_big = (bmask & 32) != 0;
+
+                bool pix_horizontal = off.x > narrow.x && off.x < narrow.y;
+                bool pix_vertical = off.y > narrow.x && off.y < narrow.y;
+
+                bool pix_set =
+                    (c_small && pix_horizontal && pix_vertical) ||
+                    (c_big && all(greaterThan(off, wide.xx)) && all(lessThan(off, wide.yy))) ||
+                    (top && pix_horizontal && off.y > narrow.y) ||
+                    (bot && pix_horizontal && off.y < narrow.x) ||
+                    (left && pix_vertical && off.x < narrow.x) ||
+                    (right && pix_vertical && off.x > narrow.y);
+
+                float rand = fract(timestamp + sin(dot(v_texcoord, vec2(12.9898, 78.233))) * 43758.5453);
+                float threshold = 0.5 - 1.0 / (3.0 + 0.1 * timestamp);
+                if (rand < threshold) {
+                    pix_set = !pix_set;
+                }
+                vec3 color = vec3(float(pix_set));
+
+                fragColor = vec4(color, 1.0);
+            }
+        `;
+
+        function compileShader(gl, type, source) {
+            const shader = gl.createShader(type);
+            gl.shaderSource(shader, source);
+            gl.compileShader(shader);
+            if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+                console.error('Shader compilation error:', gl.getShaderInfoLog(shader));
+                gl.deleteShader(shader);
+                return null;
+            }
+            return shader;
+        }
+
+        function createShaderProgram(gl, vertexSource, fragmentSource) {
+            const vertexShader = compileShader(gl, gl.VERTEX_SHADER, vertexSource);
+            const fragmentShader = compileShader(gl, gl.FRAGMENT_SHADER, fragmentSource);
+            const program = gl.createProgram();
+            gl.attachShader(program, vertexShader);
+            gl.attachShader(program, fragmentShader);
+            gl.linkProgram(program);
+            if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+                console.error('Program linking error:', gl.getProgramInfoLog(program));
+                return null;
+            }
+            gl.deleteShader(vertexShader);
+            gl.deleteShader(fragmentShader);
+            return program;
+        }
+
+        function main() {
+            const canvas = document.getElementById('glCanvas');
+            const gl = canvas.getContext('webgl2');
+            if (!gl) {
+                console.error('WebGL 2 not supported');
+                return;
+            }
+
+            initState();
+
+            const shader = createShaderProgram(gl, vertexShaderSource, fragmentShaderSource);
+            if (!shader) {
+                return;
+            }
+
+            const vertices = new Float32Array([
+                -1.0, -1.0, 0.0, 0.0,
+                1.0, -1.0, 1.0, 0.0,
+                1.0, 1.0, 1.0, 1.0,
+                -1.0, 1.0, 0.0, 1.0
+            ]);
+
+            const vbo = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+            gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
+
+            const vao = gl.createVertexArray();
+            gl.bindVertexArray(vao);
+
+            const positionLocation = gl.getAttribLocation(shader, 'position');
+            const texcoordLocation = gl.getAttribLocation(shader, 'texcoord');
+
+            gl.enableVertexAttribArray(positionLocation);
+            gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 16, 0);
+            gl.enableVertexAttribArray(texcoordLocation);
+            gl.vertexAttribPointer(texcoordLocation, 2, gl.FLOAT, false, 16, 8);
+
+            const texture = gl.createTexture();
+            gl.bindTexture(gl.TEXTURE_2D, texture);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+            const _loc_N = gl.getUniformLocation(shader, 'N');
+            const _loc_timestamp = gl.getUniformLocation(shader, 'timestamp');
+
+            function render(timestamp) {
+                gl.clearColor(0.0, 0.0, 0.0, 1.0);
+                gl.clear(gl.COLOR_BUFFER_BIT);
+
+                gl.useProgram(shader);
+                gl.uniform1i(_loc_N, N);
+                gl.uniform1f(_loc_timestamp, timestamp / 1000);
+
+                gl.bindVertexArray(vao);
+                gl.activeTexture(gl.TEXTURE0);
+                gl.bindTexture(gl.TEXTURE_2D, texture);
+                gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8UI, N, N, 0, gl.RED_INTEGER, gl.UNSIGNED_BYTE, state);
+
+                gl.drawArrays(gl.TRIANGLE_FAN, 0, 4);
+
+                requestAnimationFrame(render);
+            }
+
+            render();
+        }
+
+        window.onload = main;
+    </script>
+</body>
+</html>
