@@ -5,6 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>snek</title>
     <style>
+        body {
+            background-color: #000;
+        }
         canvas {
             display: block;
             margin: 0 auto;
@@ -52,10 +55,10 @@
         const vertexShaderSource = `#version 300 es
             in vec2 position;
             in vec2 texcoord;
-            out vec2 v_texcoord;
+            out vec2 screenCoord;
             void main() {
                 gl_Position = vec4(position, 0.0, 1.0);
-                v_texcoord = texcoord;
+                screenCoord = texcoord;
             }
         `;
 
@@ -66,15 +69,27 @@
             uniform usampler2D state_texture;
             uniform int N;
             uniform float timestamp;
-            in vec2 v_texcoord;
+            in vec2 screenCoord;
             out vec4 fragColor;
 
             const vec2 narrow = vec2(0.3, 0.7);
             const vec2 wide = vec2(0.2, 0.8);
 
+            const float warp = 0.8;
+
             void main() {
-                int bmask = int(texture(state_texture, v_texcoord).r);
-                vec2 off = fract(v_texcoord * float(N));
+                // map coordinates to create a wrapped CRT effect
+                vec2 coord = screenCoord;
+                vec2 dc = abs(0.5 - coord);
+                dc *= dc;
+                coord.x -= 0.5; coord.x *= 1.0 + (dc.y * (0.3 * warp)); coord.x += 0.5;
+                coord.y -= 0.5; coord.y *= 1.0 + (dc.x * (0.4 * warp)); coord.y += 0.5;
+                if (!(all(greaterThan(coord, vec2(0.0))) && all(lessThan(coord, vec2(1.0))))) {
+                    discard;
+                }
+
+                int bmask = int(texture(state_texture, coord).r);
+                vec2 off = fract(coord * float(N));
 
                 bool top = (bmask & 1) != 0;
                 bool bot = (bmask & 2) != 0;
@@ -93,14 +108,23 @@
                     (bot && pix_horizontal && off.y < narrow.x) ||
                     (left && pix_vertical && off.x < narrow.x) ||
                     (right && pix_vertical && off.x > narrow.y);
-
-                float rand = fract(timestamp + sin(dot(v_texcoord, vec2(12.9898, 78.233))) * 43758.5453);
-                float threshold = 0.5 - 1.0 / (3.0 + 0.1 * timestamp);
-                if (rand < threshold) {
-                    pix_set = !pix_set;
-                }
                 vec3 color = vec3(float(pix_set));
 
+                // inject random white noise
+                float noise = 2.0 * fract(timestamp + sin(dot(floor(coord * 500.0) / 500.0, vec2(12.9898, 78.233))) * 43758.5453) - 1.0;
+                color += noise * 4.0 / (1.0 + exp(-(timestamp - 200.0) / 100.0));
+                color = clamp(color, 0.0, 1.0);
+
+                // add a scanline effect
+                float scan_line = abs(sin(coord.y * 500.0) * 0.8);
+                color *= scan_line;
+
+                // apply a vignette with a sudden dropoff at the edges
+                color *= 0.1 + vec3(1.0 / (1.0 + exp(20.0 * (-0.25 + length(dc)))));
+
+                // amber tint
+                color.b = 0.0;
+                color.g *= 0.69;
                 fragColor = vec4(color, 1.0);
             }
         `;
