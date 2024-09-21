@@ -5,8 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>snek</title>
     <style>
-        body {
+        body, html {
             background-color: #000;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
         }
         canvas {
             display: block;
@@ -15,217 +19,219 @@
     </style>
 </head>
 <body>
-    <canvas id="glCanvas" width="700" height="700"></canvas>
-    <script>
-        const N = 32;
-        const BM = {
-            top: 1,
-            bot: 2,
-            left: 4,
-            right: 8,
-            c_small: 16,
-            c_big: 32,
-        };
+<canvas id="glCanvas" width="700" height="700"></canvas>
+<script>
+'use strict';
 
-        let state = new Uint8Array(N * N);
+const N = 32;
+const BM = {
+    top: 1,
+    bot: 2,
+    left: 4,
+    right: 8,
+    c_small: 16,
+    c_big: 32,
+};
 
-        function initState() {
-            state.fill(0);
-            state[5 * N + 5] = BM.c_big;
-            state[5 * N + 6] = 4 | 8 | BM.c_small;
-            state[5 * N + 7] = 4 | 8 | BM.c_small;
-            state[5 * N + 8] = 4 | 8 | BM.c_small;
-            state[5 * N + 9] = 4 | 1 | BM.c_small;
-            state[6 * N + 9] = 1 | 2 | BM.c_small;
-            state[7 * N + 9] = 1 | 2 | BM.c_small;
-            state[8 * N + 9] = 1 | 2 | BM.c_small;
-            state[9 * N + 9] = 2 | 8 | BM.c_small;
-            state[9 * N + 10] = 4;
+let state = new Uint8Array(N * N);
 
-            for (let i = 0; i < N; i++) {
-                state[i] = state[i + N * (N - 1)] = BM.left | BM.right | BM.c_small;
-                state[i * N] = state[i * N + N - 1] = BM.top | BM.bot | BM.c_small;
-            }
-            state[0] = BM.top | BM.right | BM.c_small;
-            state[N - 1] = BM.top | BM.left | BM.c_small;
-            state[N * (N - 1)] = BM.bot | BM.right | BM.c_small;
-            state[N * N - 1] = BM.bot | BM.left | BM.c_small;
+function initState() {
+    state.fill(0);
+    state[5 * N + 5] = BM.c_big;
+    state[5 * N + 6] = 4 | 8 | BM.c_small;
+    state[5 * N + 7] = 4 | 8 | BM.c_small;
+    state[5 * N + 8] = 4 | 8 | BM.c_small;
+    state[5 * N + 9] = 4 | 1 | BM.c_small;
+    state[6 * N + 9] = 1 | 2 | BM.c_small;
+    state[7 * N + 9] = 1 | 2 | BM.c_small;
+    state[8 * N + 9] = 1 | 2 | BM.c_small;
+    state[9 * N + 9] = 2 | 8 | BM.c_small;
+    state[9 * N + 10] = 4;
+
+    for (let i = 0; i < N; i++) {
+        state[i] = state[i + N * (N - 1)] = BM.left | BM.right | BM.c_small;
+        state[i * N] = state[i * N + N - 1] = BM.top | BM.bot | BM.c_small;
+    }
+    state[0] = BM.top | BM.right | BM.c_small;
+    state[N - 1] = BM.top | BM.left | BM.c_small;
+    state[N * (N - 1)] = BM.bot | BM.right | BM.c_small;
+    state[N * N - 1] = BM.bot | BM.left | BM.c_small;
+}
+
+const vertexShaderSource = `#version 300 es
+    in vec2 position;
+    in vec2 texcoord;
+    out vec2 screenCoord;
+    void main() {
+        gl_Position = vec4(position, 0.0, 1.0);
+        screenCoord = texcoord;
+    }
+`;
+
+const fragmentShaderSource = `#version 300 es
+    precision mediump float;
+    precision mediump usampler2D;
+
+    uniform usampler2D state_texture;
+    uniform int N;
+    uniform float timestamp;
+    in vec2 screenCoord;
+    out vec4 fragColor;
+
+    const vec2 narrow = vec2(0.3, 0.7);
+    const vec2 wide = vec2(0.2, 0.8);
+
+    const float warp = 0.8;
+
+    void main() {
+        // map coordinates to create a wrapped CRT effect
+        vec2 coord = screenCoord;
+        vec2 dc = abs(0.5 - coord);
+        dc *= dc;
+        coord.x -= 0.5; coord.x *= 1.0 + (dc.y * (0.3 * warp)); coord.x += 0.5;
+        coord.y -= 0.5; coord.y *= 1.0 + (dc.x * (0.4 * warp)); coord.y += 0.5;
+        if (!(all(greaterThan(coord, vec2(0.0))) && all(lessThan(coord, vec2(1.0))))) {
+            discard;
         }
 
-        const vertexShaderSource = `#version 300 es
-            in vec2 position;
-            in vec2 texcoord;
-            out vec2 screenCoord;
-            void main() {
-                gl_Position = vec4(position, 0.0, 1.0);
-                screenCoord = texcoord;
-            }
-        `;
+        int bmask = int(texture(state_texture, coord).r);
+        vec2 off = fract(coord * float(N));
 
-        const fragmentShaderSource = `#version 300 es
-            precision mediump float;
-            precision mediump usampler2D;
+        bool top = (bmask & 1) != 0;
+        bool bot = (bmask & 2) != 0;
+        bool left = (bmask & 4) != 0;
+        bool right = (bmask & 8) != 0;
+        bool c_small = (bmask & 16) != 0;
+        bool c_big = (bmask & 32) != 0;
 
-            uniform usampler2D state_texture;
-            uniform int N;
-            uniform float timestamp;
-            in vec2 screenCoord;
-            out vec4 fragColor;
+        bool pix_horizontal = off.x > narrow.x && off.x < narrow.y;
+        bool pix_vertical = off.y > narrow.x && off.y < narrow.y;
 
-            const vec2 narrow = vec2(0.3, 0.7);
-            const vec2 wide = vec2(0.2, 0.8);
+        bool pix_set =
+            (c_small && pix_horizontal && pix_vertical) ||
+            (c_big && all(greaterThan(off, wide.xx)) && all(lessThan(off, wide.yy))) ||
+            (top && pix_horizontal && off.y > narrow.y) ||
+            (bot && pix_horizontal && off.y < narrow.x) ||
+            (left && pix_vertical && off.x < narrow.x) ||
+            (right && pix_vertical && off.x > narrow.y);
+        vec3 color = vec3(float(pix_set));
 
-            const float warp = 0.8;
+        // inject random white noise
+        float noise = 2.0 * fract(timestamp + sin(dot(floor(coord * 500.0) / 500.0, vec2(12.9898, 78.233))) * 43758.5453) - 1.0;
+        color += noise * 4.0 / (1.0 + exp(-(timestamp - 200.0) / 100.0));
+        color = clamp(color, 0.0, 1.0);
 
-            void main() {
-                // map coordinates to create a wrapped CRT effect
-                vec2 coord = screenCoord;
-                vec2 dc = abs(0.5 - coord);
-                dc *= dc;
-                coord.x -= 0.5; coord.x *= 1.0 + (dc.y * (0.3 * warp)); coord.x += 0.5;
-                coord.y -= 0.5; coord.y *= 1.0 + (dc.x * (0.4 * warp)); coord.y += 0.5;
-                if (!(all(greaterThan(coord, vec2(0.0))) && all(lessThan(coord, vec2(1.0))))) {
-                    discard;
-                }
+        // add a scanline effect
+        float scan_line = abs(sin(coord.y * 500.0) * 0.8);
+        color *= scan_line;
 
-                int bmask = int(texture(state_texture, coord).r);
-                vec2 off = fract(coord * float(N));
+        // apply a vignette with a sudden dropoff at the edges
+        color *= 0.1 + vec3(1.0 / (1.0 + exp(20.0 * (-0.25 + length(dc)))));
 
-                bool top = (bmask & 1) != 0;
-                bool bot = (bmask & 2) != 0;
-                bool left = (bmask & 4) != 0;
-                bool right = (bmask & 8) != 0;
-                bool c_small = (bmask & 16) != 0;
-                bool c_big = (bmask & 32) != 0;
+        // amber tint
+        color.b = 0.0;
+        color.g *= 0.69;
+        fragColor = vec4(color, 1.0);
+    }
+`;
 
-                bool pix_horizontal = off.x > narrow.x && off.x < narrow.y;
-                bool pix_vertical = off.y > narrow.x && off.y < narrow.y;
+function compileShader(gl, type, source) {
+    const shader = gl.createShader(type);
+    gl.shaderSource(shader, source);
+    gl.compileShader(shader);
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        console.error('Shader compilation error:', gl.getShaderInfoLog(shader));
+        gl.deleteShader(shader);
+        return null;
+    }
+    return shader;
+}
 
-                bool pix_set =
-                    (c_small && pix_horizontal && pix_vertical) ||
-                    (c_big && all(greaterThan(off, wide.xx)) && all(lessThan(off, wide.yy))) ||
-                    (top && pix_horizontal && off.y > narrow.y) ||
-                    (bot && pix_horizontal && off.y < narrow.x) ||
-                    (left && pix_vertical && off.x < narrow.x) ||
-                    (right && pix_vertical && off.x > narrow.y);
-                vec3 color = vec3(float(pix_set));
+function createShaderProgram(gl, vertexSource, fragmentSource) {
+    const vertexShader = compileShader(gl, gl.VERTEX_SHADER, vertexSource);
+    const fragmentShader = compileShader(gl, gl.FRAGMENT_SHADER, fragmentSource);
+    const program = gl.createProgram();
+    gl.attachShader(program, vertexShader);
+    gl.attachShader(program, fragmentShader);
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+        console.error('Program linking error:', gl.getProgramInfoLog(program));
+        return null;
+    }
+    gl.deleteShader(vertexShader);
+    gl.deleteShader(fragmentShader);
+    return program;
+}
 
-                // inject random white noise
-                float noise = 2.0 * fract(timestamp + sin(dot(floor(coord * 500.0) / 500.0, vec2(12.9898, 78.233))) * 43758.5453) - 1.0;
-                color += noise * 4.0 / (1.0 + exp(-(timestamp - 200.0) / 100.0));
-                color = clamp(color, 0.0, 1.0);
+function main() {
+    const canvas = document.getElementById('glCanvas');
+    const gl = canvas.getContext('webgl2');
+    if (!gl) {
+        console.error('WebGL 2 not supported');
+        return;
+    }
 
-                // add a scanline effect
-                float scan_line = abs(sin(coord.y * 500.0) * 0.8);
-                color *= scan_line;
+    initState();
 
-                // apply a vignette with a sudden dropoff at the edges
-                color *= 0.1 + vec3(1.0 / (1.0 + exp(20.0 * (-0.25 + length(dc)))));
+    const shader = createShaderProgram(gl, vertexShaderSource, fragmentShaderSource);
+    if (!shader) {
+        return;
+    }
 
-                // amber tint
-                color.b = 0.0;
-                color.g *= 0.69;
-                fragColor = vec4(color, 1.0);
-            }
-        `;
+    const vertices = new Float32Array([
+        -1.0, -1.0, 0.0, 0.0,
+        1.0, -1.0, 1.0, 0.0,
+        1.0, 1.0, 1.0, 1.0,
+        -1.0, 1.0, 0.0, 1.0
+    ]);
 
-        function compileShader(gl, type, source) {
-            const shader = gl.createShader(type);
-            gl.shaderSource(shader, source);
-            gl.compileShader(shader);
-            if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-                console.error('Shader compilation error:', gl.getShaderInfoLog(shader));
-                gl.deleteShader(shader);
-                return null;
-            }
-            return shader;
-        }
+    const vbo = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+    gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
 
-        function createShaderProgram(gl, vertexSource, fragmentSource) {
-            const vertexShader = compileShader(gl, gl.VERTEX_SHADER, vertexSource);
-            const fragmentShader = compileShader(gl, gl.FRAGMENT_SHADER, fragmentSource);
-            const program = gl.createProgram();
-            gl.attachShader(program, vertexShader);
-            gl.attachShader(program, fragmentShader);
-            gl.linkProgram(program);
-            if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-                console.error('Program linking error:', gl.getProgramInfoLog(program));
-                return null;
-            }
-            gl.deleteShader(vertexShader);
-            gl.deleteShader(fragmentShader);
-            return program;
-        }
+    const vao = gl.createVertexArray();
+    gl.bindVertexArray(vao);
 
-        function main() {
-            const canvas = document.getElementById('glCanvas');
-            const gl = canvas.getContext('webgl2');
-            if (!gl) {
-                console.error('WebGL 2 not supported');
-                return;
-            }
+    const positionLocation = gl.getAttribLocation(shader, 'position');
+    const texcoordLocation = gl.getAttribLocation(shader, 'texcoord');
 
-            initState();
+    gl.enableVertexAttribArray(positionLocation);
+    gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 16, 0);
+    gl.enableVertexAttribArray(texcoordLocation);
+    gl.vertexAttribPointer(texcoordLocation, 2, gl.FLOAT, false, 16, 8);
 
-            const shader = createShaderProgram(gl, vertexShaderSource, fragmentShaderSource);
-            if (!shader) {
-                return;
-            }
+    const texture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
-            const vertices = new Float32Array([
-                -1.0, -1.0, 0.0, 0.0,
-                1.0, -1.0, 1.0, 0.0,
-                1.0, 1.0, 1.0, 1.0,
-                -1.0, 1.0, 0.0, 1.0
-            ]);
+    const _loc_N = gl.getUniformLocation(shader, 'N');
+    const _loc_timestamp = gl.getUniformLocation(shader, 'timestamp');
 
-            const vbo = gl.createBuffer();
-            gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-            gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
+    function render(timestamp) {
+        gl.clearColor(0.0, 0.0, 0.0, 1.0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
 
-            const vao = gl.createVertexArray();
-            gl.bindVertexArray(vao);
+        gl.useProgram(shader);
+        gl.uniform1i(_loc_N, N);
+        gl.uniform1f(_loc_timestamp, timestamp / 1000);
 
-            const positionLocation = gl.getAttribLocation(shader, 'position');
-            const texcoordLocation = gl.getAttribLocation(shader, 'texcoord');
+        gl.bindVertexArray(vao);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8UI, N, N, 0, gl.RED_INTEGER, gl.UNSIGNED_BYTE, state);
 
-            gl.enableVertexAttribArray(positionLocation);
-            gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 16, 0);
-            gl.enableVertexAttribArray(texcoordLocation);
-            gl.vertexAttribPointer(texcoordLocation, 2, gl.FLOAT, false, 16, 8);
+        gl.drawArrays(gl.TRIANGLE_FAN, 0, 4);
 
-            const texture = gl.createTexture();
-            gl.bindTexture(gl.TEXTURE_2D, texture);
-            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        requestAnimationFrame(render);
+    }
 
-            const _loc_N = gl.getUniformLocation(shader, 'N');
-            const _loc_timestamp = gl.getUniformLocation(shader, 'timestamp');
+    render();
+}
 
-            function render(timestamp) {
-                gl.clearColor(0.0, 0.0, 0.0, 1.0);
-                gl.clear(gl.COLOR_BUFFER_BIT);
-
-                gl.useProgram(shader);
-                gl.uniform1i(_loc_N, N);
-                gl.uniform1f(_loc_timestamp, timestamp / 1000);
-
-                gl.bindVertexArray(vao);
-                gl.activeTexture(gl.TEXTURE0);
-                gl.bindTexture(gl.TEXTURE_2D, texture);
-                gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8UI, N, N, 0, gl.RED_INTEGER, gl.UNSIGNED_BYTE, state);
-
-                gl.drawArrays(gl.TRIANGLE_FAN, 0, 4);
-
-                requestAnimationFrame(render);
-            }
-
-            render();
-        }
-
-        window.onload = main;
-    </script>
+window.onload = main;
+</script>
 </body>
 </html>
