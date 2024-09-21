@@ -23,39 +23,96 @@
 <script>
 'use strict';
 
-const N = 32;
-const BM = {
-    top: 1,
-    bot: 2,
-    left: 4,
-    right: 8,
-    c_small: 16,
-    c_big: 32,
-};
+const N = 32; // playfield size
 
-let state = new Uint8Array(N * N);
+// array is passed to the fragment shader for rendering; each cell is a bitmask of BM_* values
+// defined below
+let cells = new Uint8Array(N * N);
 
-function initState() {
-    state.fill(0);
-    state[5 * N + 5] = BM.c_big;
-    state[5 * N + 6] = 4 | 8 | BM.c_small;
-    state[5 * N + 7] = 4 | 8 | BM.c_small;
-    state[5 * N + 8] = 4 | 8 | BM.c_small;
-    state[5 * N + 9] = 4 | 1 | BM.c_small;
-    state[6 * N + 9] = 1 | 2 | BM.c_small;
-    state[7 * N + 9] = 1 | 2 | BM.c_small;
-    state[8 * N + 9] = 1 | 2 | BM.c_small;
-    state[9 * N + 9] = 2 | 8 | BM.c_small;
-    state[9 * N + 10] = 4;
+let head = [16, 15];
+let tail = [15, 15];
+let gameOver = false;
 
-    for (let i = 0; i < N; i++) {
-        state[i] = state[i + N * (N - 1)] = BM.left | BM.right | BM.c_small;
-        state[i * N] = state[i * N + N - 1] = BM.top | BM.bot | BM.c_small;
+// direction vector is updated in tick() while keydown() only sets nextDirection allowing the player
+// to "change their mind" by pressing multiple arrow keys in quick succession
+// FIXME: this prevents 180-degree self-hits but makes diagonal chords unreliable
+let direction = [1, 0];
+let nextDirection = [1, 0];
+
+const BM_TOP = 1; // snake body or wall connecting upwards
+const BM_BOT = 2; // snake body or wall connecting downwards
+const BM_LEFT = 4; // snake body or wall connecting to the left
+const BM_RIGHT = 8; // snake body or wall connecting to the right
+const BM_SEG = 16; // snake body or wall segment in the middle of the cell
+const BM_APPLE = 32; // bigger rectangle representing the apple to be eaten by the snake
+
+const BM_HORIZONTAL = BM_LEFT | BM_RIGHT | BM_SEG;
+const BM_VERTICAL = BM_TOP | BM_BOT | BM_SEG;
+
+// Converts a 2-element direction vector to one of the BM_* constants. Diagonals are not allowed.
+let dirToBitmask = function(dir) {
+    if (dir[0] === 1) {
+        return BM_RIGHT;
+    } else if (dir[0] === -1) {
+        return BM_LEFT;
+    } else if (dir[1] === 1) {
+        return BM_TOP;
+    } else if (dir[1] === -1) {
+        return BM_BOT;
     }
-    state[0] = BM.top | BM.right | BM.c_small;
-    state[N - 1] = BM.top | BM.left | BM.c_small;
-    state[N * (N - 1)] = BM.bot | BM.right | BM.c_small;
-    state[N * N - 1] = BM.bot | BM.left | BM.c_small;
+    throw new Error('Invalid direction');
+}
+
+// Converts a cell bitmask value to a 2-element direction vector. Exactly one of the BM_TOP, BM_BOT,
+// BM_LEFT and BM_RIGHT bits must be set.
+let bitmaskToDir = function(bitmask) {
+    let result;
+    if (bitmask & BM_TOP) {
+        result = [0, 1];
+        bitmask &= ~BM_TOP;
+    } else if (bitmask & BM_BOT) {
+        result = [0, -1];
+        bitmask &= ~BM_BOT;
+    } else if (bitmask & BM_LEFT) {
+        result = [-1, 0];
+        bitmask &= ~BM_LEFT;
+    } else if (bitmask & BM_RIGHT) {
+        result = [1, 0];
+        bitmask &= ~BM_RIGHT;
+    }
+    if (!result || (bitmask & (BM_TOP | BM_BOT | BM_LEFT | BM_RIGHT)) !== 0) {
+        throw new Error('Invalid bitmask');
+    }
+    return result;
+}
+
+let placeNewApple = function() {
+    let x, y;
+    do {
+        x = Math.floor(Math.random() * N);
+        y = Math.floor(Math.random() * N);
+    } while (cells[x + N * y] !== 0);
+    cells[x + N * y] = BM_APPLE;
+}
+
+let initCells = function() {
+    cells.fill(0);
+
+    // initial snake
+    cells[tail[0] + N * tail[1]] = BM_SEG | BM_RIGHT;
+    cells[head[0] + N * head[1]] = BM_SEG | BM_LEFT;
+
+    // walls around the playfield
+    for (let i = 0; i < N; i++) {
+        cells[i] = cells[i + N * (N - 1)] = BM_HORIZONTAL;
+        cells[i * N] = cells[i * N + N - 1] = BM_VERTICAL;
+    }
+    cells[0] = BM_TOP | BM_RIGHT | BM_SEG;
+    cells[N - 1] = BM_TOP | BM_LEFT | BM_SEG;
+    cells[N * (N - 1)] = BM_BOT | BM_RIGHT | BM_SEG;
+    cells[N * N - 1] = BM_BOT | BM_LEFT | BM_SEG;
+
+    placeNewApple();
 }
 
 const vertexShaderSource = `#version 300 es
@@ -72,7 +129,7 @@ const fragmentShaderSource = `#version 300 es
     precision mediump float;
     precision mediump usampler2D;
 
-    uniform usampler2D state_texture;
+    uniform usampler2D cells;
     uniform int N;
     uniform float timestamp;
     in vec2 screenCoord;
@@ -94,22 +151,23 @@ const fragmentShaderSource = `#version 300 es
             discard;
         }
 
-        int bmask = int(texture(state_texture, coord).r);
+        int bmask = int(texture(cells, coord).r);
         vec2 off = fract(coord * float(N));
 
+        // see BM_* constants in the JS code
         bool top = (bmask & 1) != 0;
         bool bot = (bmask & 2) != 0;
         bool left = (bmask & 4) != 0;
         bool right = (bmask & 8) != 0;
-        bool c_small = (bmask & 16) != 0;
-        bool c_big = (bmask & 32) != 0;
+        bool seg = (bmask & 16) != 0;
+        bool apple = (bmask & 32) != 0;
 
         bool pix_horizontal = off.x > narrow.x && off.x < narrow.y;
         bool pix_vertical = off.y > narrow.x && off.y < narrow.y;
 
         bool pix_set =
-            (c_small && pix_horizontal && pix_vertical) ||
-            (c_big && all(greaterThan(off, wide.xx)) && all(lessThan(off, wide.yy))) ||
+            (seg && pix_horizontal && pix_vertical) ||
+            (apple && all(greaterThan(off, wide.xx)) && all(lessThan(off, wide.yy))) ||
             (top && pix_horizontal && off.y > narrow.y) ||
             (bot && pix_horizontal && off.y < narrow.x) ||
             (left && pix_vertical && off.x < narrow.x) ||
@@ -118,7 +176,7 @@ const fragmentShaderSource = `#version 300 es
 
         // inject random white noise
         float noise = 2.0 * fract(timestamp + sin(dot(floor(coord * 500.0) / 500.0, vec2(12.9898, 78.233))) * 43758.5453) - 1.0;
-        color += noise * 4.0 / (1.0 + exp(-(timestamp - 200.0) / 100.0));
+        color += noise * 4.0 / (1.0 + exp(-(timestamp - 50.0) / 10.0));
         color = clamp(color, 0.0, 1.0);
 
         // add a scanline effect
@@ -135,19 +193,18 @@ const fragmentShaderSource = `#version 300 es
     }
 `;
 
-function compileShader(gl, type, source) {
-    const shader = gl.createShader(type);
-    gl.shaderSource(shader, source);
-    gl.compileShader(shader);
-    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-        console.error('Shader compilation error:', gl.getShaderInfoLog(shader));
-        gl.deleteShader(shader);
-        return null;
+let createShaderProgram = function(gl, vertexSource, fragmentSource) {
+    let compileShader = function(gl, type, source) {
+        const shader = gl.createShader(type);
+        gl.shaderSource(shader, source);
+        gl.compileShader(shader);
+        if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+            console.error('Shader compilation error:', gl.getShaderInfoLog(shader));
+            gl.deleteShader(shader);
+            return null;
+        }
+        return shader;
     }
-    return shader;
-}
-
-function createShaderProgram(gl, vertexSource, fragmentSource) {
     const vertexShader = compileShader(gl, gl.VERTEX_SHADER, vertexSource);
     const fragmentShader = compileShader(gl, gl.FRAGMENT_SHADER, fragmentSource);
     const program = gl.createProgram();
@@ -163,7 +220,58 @@ function createShaderProgram(gl, vertexSource, fragmentSource) {
     return program;
 }
 
-function main() {
+let tick = function() {
+    if (gameOver) {
+        return;
+    }
+    direction = nextDirection;
+
+    cells[head[0] + N * head[1]] |= dirToBitmask(direction);
+    head[0] = head[0] + direction[0];
+    head[1] = head[1] + direction[1];
+
+    let headIdx = head[0] + N * head[1];
+    let frontCell = cells[headIdx];
+    if (frontCell & BM_SEG) {
+        gameOver = true;
+        return;
+    }
+    cells[headIdx] = BM_SEG | dirToBitmask([-direction[0], -direction[1]]);
+
+    if (frontCell & BM_APPLE) {
+        placeNewApple();
+    } else {
+        // remove tail segment
+        let tailIdx = tail[0] + N * tail[1];
+        let tailCell = cells[tailIdx];
+        let tailDir = bitmaskToDir(tailCell);
+        cells[tailIdx] = 0; // clear old tail cell completely
+
+        // advance the tail
+        tail[0] = tail[0] + tailDir[0];
+        tail[1] = tail[1] + tailDir[1];
+        tailIdx = tail[0] + N * tail[1];
+
+        // new tail cell value needs to be updated so that it contains only BM_SEG and one of the
+        // directional bits
+        cells[tailIdx] &= ~dirToBitmask([-tailDir[0], -tailDir[1]]);
+    }
+}
+
+let keydown = function(event) {
+    const KEY_DIR = {
+        'ArrowUp': [0, 1],
+        'ArrowDown': [0, -1],
+        'ArrowLeft': [-1, 0],
+        'ArrowRight': [1, 0]
+    };
+    let dir = KEY_DIR[event.key];
+    if (dir && dir[0] !== -direction[0] && dir[1] !== -direction[1]) {
+        nextDirection = dir;
+    }
+}
+
+let onload = function() {
     const canvas = document.getElementById('glCanvas');
     const gl = canvas.getContext('webgl2');
     if (!gl) {
@@ -171,7 +279,7 @@ function main() {
         return;
     }
 
-    initState();
+    initCells();
 
     const shader = createShaderProgram(gl, vertexShaderSource, fragmentShaderSource);
     if (!shader) {
@@ -216,22 +324,28 @@ function main() {
 
         gl.useProgram(shader);
         gl.uniform1i(_loc_N, N);
+        if (gameOver) {
+            // no noise shown on the game over screen
+            timestamp = 0;
+        }
         gl.uniform1f(_loc_timestamp, timestamp / 1000);
 
         gl.bindVertexArray(vao);
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, texture);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8UI, N, N, 0, gl.RED_INTEGER, gl.UNSIGNED_BYTE, state);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8UI, N, N, 0, gl.RED_INTEGER, gl.UNSIGNED_BYTE, cells);
 
         gl.drawArrays(gl.TRIANGLE_FAN, 0, 4);
 
         requestAnimationFrame(render);
     }
 
-    render();
+    requestAnimationFrame(render);
+    setInterval(tick, 100);
+    document.addEventListener('keydown', keydown);
 }
 
-window.onload = main;
+window.onload = onload;
 </script>
 </body>
 </html>
