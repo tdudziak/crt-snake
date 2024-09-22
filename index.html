@@ -33,11 +33,10 @@ let cells = new Uint8Array(N * N);
 let head, tail;
 let gameOver = false;
 
-// direction vector is updated in tick() while keydown() only sets nextDirection allowing the player
-// to "change their mind" by pressing multiple arrow keys in quick succession
-// FIXME: this prevents 180-degree self-hits but makes diagonal chords unreliable
+// direction vector is updated in tick() while keydown() only appends to nextDirections allowing
+// to queue up tight turns
 let direction = [-1, 0];
-let nextDirection = [-1, 0];
+let nextDirections = [];
 
 const BM_TOP = 1; // snake body or wall connecting upwards
 const BM_BOT = 2; // snake body or wall connecting downwards
@@ -258,7 +257,13 @@ let tick = function() {
     if (gameOver) {
         return;
     }
-    direction = nextDirection;
+    if (nextDirections.length > 0) {
+        const d = nextDirections.shift();
+        // prevent game over on 180 degree turn
+        if (!(d[0] === -direction[0] && d[1] === -direction[1])) {
+            direction = d;
+        }
+    }
 
     cells[head[0] + N * head[1]] |= dirToBitmask(direction);
     head[0] = head[0] + direction[0];
@@ -300,8 +305,8 @@ let keydown = function(event) {
         'ArrowRight': [1, 0]
     };
     let dir = KEY_DIR[event.key];
-    if (dir && dir[0] !== -direction[0] && dir[1] !== -direction[1]) {
-        nextDirection = dir;
+    if (dir && nextDirections.length < 5) {
+        nextDirections.push(dir);
     }
 }
 
