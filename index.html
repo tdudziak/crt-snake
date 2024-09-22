@@ -24,20 +24,20 @@
 'use strict';
 
 const N = 32; // playfield size
+const START_COIL = 4; // corresponds to the starting length of the snake
 
 // array is passed to the fragment shader for rendering; each cell is a bitmask of BM_* values
 // defined below
 let cells = new Uint8Array(N * N);
 
-let head = [16, 15];
-let tail = [15, 15];
+let head, tail;
 let gameOver = false;
 
 // direction vector is updated in tick() while keydown() only sets nextDirection allowing the player
 // to "change their mind" by pressing multiple arrow keys in quick succession
 // FIXME: this prevents 180-degree self-hits but makes diagonal chords unreliable
-let direction = [1, 0];
-let nextDirection = [1, 0];
+let direction = [-1, 0];
+let nextDirection = [-1, 0];
 
 const BM_TOP = 1; // snake body or wall connecting upwards
 const BM_BOT = 2; // snake body or wall connecting downwards
@@ -98,9 +98,43 @@ let placeNewApple = function() {
 let initCells = function() {
     cells.fill(0);
 
-    // initial snake
+    // initial snake: spiral that starts at the center
+    tail = [15, 15];
     cells[tail[0] + N * tail[1]] = BM_SEG | BM_RIGHT;
-    cells[head[0] + N * head[1]] = BM_SEG | BM_LEFT;
+    let p = [16, 15];
+    cells[p[0] + N * p[1]] = BM_SEG | BM_LEFT | BM_BOT;
+    p[1]--;
+    cells[p[0] + N * p[1]] = BM_SEG | BM_TOP | BM_LEFT;
+    let steps = 2; // size of the current layer of the spiral
+    for (let layer = 0; layer < START_COIL; ++layer) {
+        for (let i = 0; i < steps - 1; ++i) {
+            p[0]--;
+            cells[p[0] + N * p[1]] = BM_HORIZONTAL;
+        }
+        p[0]--;
+        cells[p[0] + N * p[1]] = BM_SEG | BM_RIGHT | BM_TOP;
+        for (let i = 0; i < steps - 1; ++i) {
+            p[1]++;
+            cells[p[0] + N * p[1]] = BM_VERTICAL;
+        }
+        p[1]++;
+        cells[p[0] + N * p[1]] = BM_SEG | BM_BOT | BM_RIGHT;
+        steps++;
+        for (let i = 0; i < steps - 1; ++i) {
+            p[0]++;
+            cells[p[0] + N * p[1]] = BM_HORIZONTAL;
+        }
+        p[0]++;
+        cells[p[0] + N * p[1]] = BM_SEG | BM_LEFT | BM_BOT;
+        for (let i = 0; i < steps - 1; ++i) {
+            p[1]--;
+            cells[p[0] + N * p[1]] = BM_VERTICAL;
+        }
+        p[1]--;
+        cells[p[0] + N * p[1]] = BM_SEG | BM_TOP | BM_LEFT;
+        steps++;
+    }
+    head = p;
 
     // walls around the playfield
     for (let i = 0; i < N; i++) {
