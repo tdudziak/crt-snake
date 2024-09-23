@@ -1,15 +1,12 @@
 #version 300 es
-precision mediump float;
-precision mediump usampler2D;
 
-uniform usampler2D cells;
-uniform int N;
+precision mediump float;
+
+uniform sampler2D renderTexture;
 uniform float timestamp;
 in vec2 screenCoord;
 out vec4 fragColor;
 
-const vec2 NARROW = vec2(0.3, 0.7);
-const vec2 WIDE = vec2(0.2, 0.8);
 const float WARP = 0.8;
 const float TIME_LIMIT = 10.0; // seconds before it's all noise
 
@@ -33,7 +30,6 @@ float analogVideoNoise(vec2 uv, float t) {
 }
 
 void main() {
-    // map coordinates to create a wrapped CRT effect
     vec2 coord = screenCoord;
     vec2 dc = abs(0.5 - coord);
     dc *= dc;
@@ -43,28 +39,7 @@ void main() {
         discard;
     }
 
-    int bmask = int(texture(cells, coord).r);
-    vec2 off = fract(coord * float(N));
-
-    // see BM_* constants in the JS code
-    bool top = (bmask & 1) != 0;
-    bool bot = (bmask & 2) != 0;
-    bool left = (bmask & 4) != 0;
-    bool right = (bmask & 8) != 0;
-    bool seg = (bmask & 16) != 0;
-    bool apple = (bmask & 32) != 0;
-
-    bool pix_horizontal = off.x > NARROW.x && off.x < NARROW.y;
-    bool pix_vertical = off.y > NARROW.x && off.y < NARROW.y;
-
-    bool pix_set =
-        (seg && pix_horizontal && pix_vertical) ||
-        (apple && all(greaterThan(off, WIDE.xx)) && all(lessThan(off, WIDE.yy))) ||
-        (top && pix_horizontal && off.y > NARROW.y) ||
-        (bot && pix_horizontal && off.y < NARROW.x) ||
-        (left && pix_vertical && off.x < NARROW.x) ||
-        (right && pix_vertical && off.x > NARROW.y);
-    vec3 color = vec3(float(pix_set));
+    vec3 color = texture(renderTexture, coord).rgb;
 
     if (timestamp < 0.15) {
         // first 150ms are a transition with pure noise
@@ -78,11 +53,11 @@ void main() {
     }
 
     // add a scanline effect
-    float scan_line = abs(sin(coord.y * 480.0) * 0.8);
+    float scan_line = clamp(abs(1.3 * sin(coord.y * 480.0)), 0.0, 1.0);
     color *= scan_line;
 
-    // apply a vignette with a sudden dropoff at the edges
-    color *= 0.1 + vec3(1.0 / (1.0 + exp(20.0 * (-0.25 + length(dc)))));
+    // apply a slight vignette effect
+    color *= 0.5 + 0.5 * clamp(1.0 - (3.0 * length(dc)), 0.0, 1.0);
 
     fragColor = vec4(color, 1.0);
 }

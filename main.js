@@ -7,7 +7,9 @@ const vertexShaderSource = `#version 300 es
         screenCoord = texcoord;
     }
 `;
-import fragmentShaderSource from './fragment.glsl?raw';
+import fragmentShader1Source from './stage1.glsl?raw';
+import fragmentShader2Source from './stage2.glsl?raw';
+import fragmentShaderBloomSource from './bloom.glsl?raw';
 
 const N = 32; // playfield size
 const START_COIL = 4; // corresponds to the starting length of the snake
@@ -221,6 +223,8 @@ let keydown = function(event) {
 }
 
 let onload = function() {
+    const FB_SZ = 1024; // dimension of both framebuffers
+
     const canvas = document.getElementById('glCanvas');
     const gl = canvas.getContext('webgl2');
     if (!gl) {
@@ -230,8 +234,10 @@ let onload = function() {
 
     initCells();
 
-    const shader = createShaderProgram(gl, vertexShaderSource, fragmentShaderSource);
-    if (!shader) {
+    const shaderStage1 = createShaderProgram(gl, vertexShaderSource, fragmentShader1Source);
+    const shaderStage2 = createShaderProgram(gl, vertexShaderSource, fragmentShader2Source);
+    const shaderBloom = createShaderProgram(gl, vertexShaderSource, fragmentShaderBloomSource);
+    if (!shaderStage1 || !shaderStage2 || !shaderBloom) {
         return;
     }
 
@@ -249,30 +255,71 @@ let onload = function() {
     const vao = gl.createVertexArray();
     gl.bindVertexArray(vao);
 
-    const positionLocation = gl.getAttribLocation(shader, 'position');
-    const texcoordLocation = gl.getAttribLocation(shader, 'texcoord');
+    const positionLocation = gl.getAttribLocation(shaderStage1, 'position');
+    const texcoordLocation = gl.getAttribLocation(shaderStage1, 'texcoord');
 
     gl.enableVertexAttribArray(positionLocation);
     gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 16, 0);
     gl.enableVertexAttribArray(texcoordLocation);
     gl.vertexAttribPointer(texcoordLocation, 2, gl.FLOAT, false, 16, 8);
 
-    const texture = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, texture);
+    // game state array `cells` passed as texture to the first stage fragment shader
+    const cellTexture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, cellTexture);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
-    const _loc_N = gl.getUniformLocation(shader, 'N');
-    const _loc_timestamp = gl.getUniformLocation(shader, 'timestamp');
+    let fbuffers = new Array(2);
+    let fbTextures = new Array(2);
+    for (let i = 0; i < 2; ++i) {
+        const fbuffer = gl.createFramebuffer();
+        const fbTexture = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, fbTexture);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, FB_SZ, FB_SZ, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fbuffer);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, fbTexture, 0);
+        fbuffers[i] = fbuffer;
+        fbTextures[i] = fbTexture;
+    }
+
+    const _loc_N = gl.getUniformLocation(shaderStage1, 'N');
+    const _loc_timestamp = gl.getUniformLocation(shaderStage2, 'timestamp');
+    const _loc_renderTexture2 = gl.getUniformLocation(shaderStage2, 'renderTexture');
+    const _loc_renderTextureBloom = gl.getUniformLocation(shaderBloom, 'renderTexture');
 
     function render(timestamp) {
+        // first stage: render the game state to a 512x512 texture with no noise or CRT effects
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fbuffers[0]);
+        gl.viewport(0, 0, FB_SZ, FB_SZ);
+
         gl.clearColor(0.0, 0.0, 0.0, 1.0);
         gl.clear(gl.COLOR_BUFFER_BIT);
 
-        gl.useProgram(shader);
+        gl.useProgram(shaderStage1);
         gl.uniform1i(_loc_N, N);
+
+        gl.bindVertexArray(vao);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, cellTexture);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8UI, N, N, 0, gl.RED_INTEGER, gl.UNSIGNED_BYTE, cells);
+
+        gl.drawArrays(gl.TRIANGLE_FAN, 0, 4);
+
+        // second stage: add CRT shape distortion, scanlines, noise etc.
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fbuffers[1]);
+        gl.viewport(0, 0, FB_SZ, FB_SZ);
+
+        gl.clearColor(0.0, 0.0, 0.0, 1.0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+
+        gl.useProgram(shaderStage2);
+        gl.uniform1i(_loc_renderTexture2, 0);
         if (gameOver) {
             // no noise shown on the game over screen
             gl.uniform1f(_loc_timestamp, 1.0);
@@ -282,10 +329,28 @@ let onload = function() {
 
         gl.bindVertexArray(vao);
         gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, texture);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8UI, N, N, 0, gl.RED_INTEGER, gl.UNSIGNED_BYTE, cells);
+        gl.bindTexture(gl.TEXTURE_2D, fbTextures[0]);
 
         gl.drawArrays(gl.TRIANGLE_FAN, 0, 4);
+
+        // third stage: render the final image to the canvas with bloom
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.viewport(0, 0, canvas.width, canvas.height);
+
+        gl.clearColor(0.0, 0.0, 0.0, 1.0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+
+        gl.useProgram(shaderBloom);
+        gl.uniform1i(_loc_renderTextureBloom, 0);
+        gl.uniform1f(gl.getUniformLocation(shaderBloom, 'timestamp'), timestamp / 1000);
+
+        gl.bindVertexArray(vao);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, fbTextures[1]);
+
+        gl.drawArrays(gl.TRIANGLE_FAN, 0, 4);
+
+
 
         requestAnimationFrame(render);
     }
