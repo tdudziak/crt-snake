@@ -188,6 +188,11 @@ const fragmentShaderSource = `#version 300 es
         return (y.x + y.y + y.z + y.w) * 0.25;
     }
 
+    float analogVideoNoise(vec2 uv, float t) {
+        float bands = 0.8 + sin(dot(vec3(uv, fract(t)), vec3(20.0, 20.0 * noise1d(t), 50.0)));
+        return clamp(bands, 0.0, 1.0) * whiteNoise(vec3(uv, fract(t)));
+    }
+
     void main() {
         // map coordinates to create a wrapped CRT effect
         vec2 coord = screenCoord;
@@ -222,11 +227,16 @@ const fragmentShaderSource = `#version 300 es
             (right && pix_vertical && off.x > NARROW.y);
         vec3 color = vec3(float(pix_set));
 
-        // inject random white noise
-        float noise = whiteNoise(vec3(coord, timestamp));
-        float noiseMix = 2.0 * (log(1.0 + 1.7182 * timestamp / TIME_LIMIT)) - noise1d(timestamp * 0.1);
-        noiseMix = clamp(noiseMix, 0.0, 1.0);
-        color = mix(color, vec3(noise), noiseMix);
+        if (timestamp < 0.15) {
+            // first 150ms are a transition with pure noise
+            color = vec3(analogVideoNoise(coord, timestamp));
+        } else {
+            // inject random white noise
+            float noise = whiteNoise(vec3(coord, timestamp));
+            float noiseMix = 2.0 * (log(1.0 + 1.7182 * timestamp / TIME_LIMIT)) - noise1d(timestamp * 0.1);
+            noiseMix = clamp(noiseMix, 0.0, 1.0);
+            color = mix(color, vec3(noise), noiseMix);
+        }
 
         // add a scanline effect
         float scan_line = abs(sin(coord.y * 480.0) * 0.8);
@@ -235,9 +245,6 @@ const fragmentShaderSource = `#version 300 es
         // apply a vignette with a sudden dropoff at the edges
         color *= 0.1 + vec3(1.0 / (1.0 + exp(20.0 * (-0.25 + length(dc)))));
 
-        // amber tint
-        color.b = 0.0;
-        color.g *= 0.69;
         fragColor = vec4(color, 1.0);
     }
 `;
@@ -382,7 +389,7 @@ let onload = function() {
         gl.uniform1i(_loc_N, N);
         if (gameOver) {
             // no noise shown on the game over screen
-            gl.uniform1f(_loc_timestamp, 0);
+            gl.uniform1f(_loc_timestamp, 1.0);
         } else {
             gl.uniform1f(_loc_timestamp, (timestamp - appleEatenTimestamp) / 1000);
         }
