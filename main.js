@@ -13,6 +13,7 @@ import fragmentShaderBloomSource from './bloom.glsl?raw';
 
 const N = 32; // playfield size
 const START_COIL = 4; // corresponds to the starting length of the snake
+const TIME_LIMIT = 10; // max noise this many seconds after each score
 
 // array is passed to the fragment shader for rendering; each cell is a bitmask of BM_* values
 // defined below
@@ -292,30 +293,43 @@ let onload = function() {
             // first stage: render the game state to a 512x512 texture with no noise or CRT effects
             shader: shaderStage1,
             out: initFramebuffer(N * 8, N * 8),
+            uniforms: {},
         },
         {
             // second stage: add CRT shape distortion, scanlines, noise etc.
             shader: shaderStage2,
             out: initFramebuffer(canvas.width, canvas.height),
+            uniforms: {},
         },
         {
-            // third stage: render the final image to the canvas with bloom
+            shader: shaderBloom,
+            out: initFramebuffer(canvas.width, canvas.height),
+            uniforms: {
+                bloomAxis: { type: "uniform2fv", value: [1.0, 0.0] },
+            },
+        },
+        {
             shader: shaderBloom,
             out: {
                 framebuffer: null,
                 texture: null,
                 viewport: [0, 0, canvas.width, canvas.height],
             },
-        }
+            uniforms: {
+                bloomAxis: { type: "uniform2fv", value: [0.0, 1.0] },
+            },
+        },
     ];
 
     function render(timestamp) {
-        let timestampUniform = undefined;
+        const relTimestamp = (timestamp - appleEatenTimestamp) / 1000;
+        let noiseLevel = 1.0; // max noise for first 100ms
         if (gameOver) {
             // no noise shown on the game over screen
-            timestampUniform = 1.0;
-        } else {
-            timestampUniform = (timestamp - appleEatenTimestamp) / 1000;
+            noiseLevel = 0.0;
+        } else if (relTimestamp > 0.1) {
+            // nonlinearly increases up to 100% at TIME_LIMIT
+            noiseLevel = Math.log2(1.0 + relTimestamp / TIME_LIMIT);
         }
 
         for (let stageIdx = 0; stageIdx < stages.length; stageIdx++) {
@@ -331,7 +345,11 @@ let onload = function() {
             gl.useProgram(stage.shader);
             gl.uniform1i(gl.getUniformLocation(stage.shader, 'stageIn'), 0);
             gl.uniform1i(gl.getUniformLocation(stage.shader, 'N'), N);
-            gl.uniform1f(gl.getUniformLocation(stage.shader, 'timestamp'), timestampUniform);
+            gl.uniform1f(gl.getUniformLocation(stage.shader, 'timestamp'), timestamp / 1000);
+            gl.uniform1f(gl.getUniformLocation(stage.shader, 'noiseLevel'), noiseLevel);
+            for (const [name, { type, value }] of Object.entries(stage.uniforms)) {
+                gl[type](gl.getUniformLocation(stage.shader, name), value);
+            }
 
             gl.bindVertexArray(vao);
             gl.activeTexture(gl.TEXTURE0);
