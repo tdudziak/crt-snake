@@ -2,7 +2,7 @@
 
 precision mediump float;
 
-uniform sampler2D renderTexture;
+uniform sampler2D stageIn;
 uniform float timestamp;
 in vec2 screenCoord;
 out vec4 fragColor;
@@ -11,7 +11,7 @@ const float COEF_CENTER = 0.21825;
 const vec3 HALF_KERNEL = vec3(0.21875, 0.109375, 0.03125);
 
 float inAt(vec2 dxy) {
-    return texture(renderTexture, screenCoord + dxy).r;
+    return texture(stageIn, screenCoord + dxy).r;
 }
 
 float flicker(float t_on, float t_off) {

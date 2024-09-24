@@ -3,7 +3,7 @@
 precision mediump float;
 precision mediump usampler2D;
 
-uniform usampler2D cells;
+uniform usampler2D stageIn;
 uniform int N;
 in vec2 screenCoord;
 out vec4 fragColor;
@@ -12,7 +12,7 @@ const vec2 NARROW = vec2(0.3, 0.7);
 const vec2 WIDE = vec2(0.2, 0.8);
 
 void main() {
-    int bmask = int(texture(cells, screenCoord).r);
+    int bmask = int(texture(stageIn, screenCoord).r);
     vec2 off = fract(screenCoord * float(N));
 
     // see BM_* constants in the JS code

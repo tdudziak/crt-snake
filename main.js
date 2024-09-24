@@ -223,8 +223,6 @@ let keydown = function(event) {
 }
 
 let onload = function() {
-    const FB_SZ = 1024; // dimension of both framebuffers
-
     const canvas = document.getElementById('glCanvas');
     const gl = canvas.getContext('webgl2');
     if (!gl) {
@@ -271,86 +269,82 @@ let onload = function() {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
-    let fbuffers = new Array(2);
-    let fbTextures = new Array(2);
-    for (let i = 0; i < 2; ++i) {
-        const fbuffer = gl.createFramebuffer();
-        const fbTexture = gl.createTexture();
-        gl.bindTexture(gl.TEXTURE_2D, fbTexture);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, FB_SZ, FB_SZ, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    function initFramebuffer(width, height) {
+        const framebuffer = gl.createFramebuffer();
+        const texture = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, width, width, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-        gl.bindFramebuffer(gl.FRAMEBUFFER, fbuffer);
-        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, fbTexture, 0);
-        fbuffers[i] = fbuffer;
-        fbTextures[i] = fbTexture;
+        gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+        return {
+            framebuffer,
+            texture,
+            viewport: [0, 0, width, height]
+        };
     }
 
-    const _loc_N = gl.getUniformLocation(shaderStage1, 'N');
-    const _loc_timestamp = gl.getUniformLocation(shaderStage2, 'timestamp');
-    const _loc_renderTexture2 = gl.getUniformLocation(shaderStage2, 'renderTexture');
-    const _loc_renderTextureBloom = gl.getUniformLocation(shaderBloom, 'renderTexture');
+    const stages = [
+        {
+            // first stage: render the game state to a 512x512 texture with no noise or CRT effects
+            shader: shaderStage1,
+            out: initFramebuffer(N * 8, N * 8),
+        },
+        {
+            // second stage: add CRT shape distortion, scanlines, noise etc.
+            shader: shaderStage2,
+            out: initFramebuffer(canvas.width, canvas.height),
+        },
+        {
+            // third stage: render the final image to the canvas with bloom
+            shader: shaderBloom,
+            out: {
+                framebuffer: null,
+                texture: null,
+                viewport: [0, 0, canvas.width, canvas.height],
+            },
+        }
+    ];
 
     function render(timestamp) {
-        // first stage: render the game state to a 512x512 texture with no noise or CRT effects
-        gl.bindFramebuffer(gl.FRAMEBUFFER, fbuffers[0]);
-        gl.viewport(0, 0, FB_SZ, FB_SZ);
-
-        gl.clearColor(0.0, 0.0, 0.0, 1.0);
-        gl.clear(gl.COLOR_BUFFER_BIT);
-
-        gl.useProgram(shaderStage1);
-        gl.uniform1i(_loc_N, N);
-
-        gl.bindVertexArray(vao);
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, cellTexture);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8UI, N, N, 0, gl.RED_INTEGER, gl.UNSIGNED_BYTE, cells);
-
-        gl.drawArrays(gl.TRIANGLE_FAN, 0, 4);
-
-        // second stage: add CRT shape distortion, scanlines, noise etc.
-        gl.bindFramebuffer(gl.FRAMEBUFFER, fbuffers[1]);
-        gl.viewport(0, 0, FB_SZ, FB_SZ);
-
-        gl.clearColor(0.0, 0.0, 0.0, 1.0);
-        gl.clear(gl.COLOR_BUFFER_BIT);
-
-        gl.useProgram(shaderStage2);
-        gl.uniform1i(_loc_renderTexture2, 0);
+        let timestampUniform = undefined;
         if (gameOver) {
             // no noise shown on the game over screen
-            gl.uniform1f(_loc_timestamp, 1.0);
+            timestampUniform = 1.0;
         } else {
-            gl.uniform1f(_loc_timestamp, (timestamp - appleEatenTimestamp) / 1000);
+            timestampUniform = (timestamp - appleEatenTimestamp) / 1000;
         }
 
-        gl.bindVertexArray(vao);
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, fbTextures[0]);
+        for (let stageIdx = 0; stageIdx < stages.length; stageIdx++) {
+            const stage = stages[stageIdx];
 
-        gl.drawArrays(gl.TRIANGLE_FAN, 0, 4);
+            // prepare and clear the output
+            gl.bindFramebuffer(gl.FRAMEBUFFER, stage.out.framebuffer);
+            gl.viewport(...stage.out.viewport);
+            gl.clearColor(0.0, 0.0, 0.0, 1.0);
+            gl.clear(gl.COLOR_BUFFER_BIT);
 
-        // third stage: render the final image to the canvas with bloom
-        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-        gl.viewport(0, 0, canvas.width, canvas.height);
+            // set up the shader program
+            gl.useProgram(stage.shader);
+            gl.uniform1i(gl.getUniformLocation(stage.shader, 'stageIn'), 0);
+            gl.uniform1i(gl.getUniformLocation(stage.shader, 'N'), N);
+            gl.uniform1f(gl.getUniformLocation(stage.shader, 'timestamp'), timestampUniform);
 
-        gl.clearColor(0.0, 0.0, 0.0, 1.0);
-        gl.clear(gl.COLOR_BUFFER_BIT);
+            gl.bindVertexArray(vao);
+            gl.activeTexture(gl.TEXTURE0);
 
-        gl.useProgram(shaderBloom);
-        gl.uniform1i(_loc_renderTextureBloom, 0);
-        gl.uniform1f(gl.getUniformLocation(shaderBloom, 'timestamp'), timestamp / 1000);
+            if (stageIdx == 0) {
+                gl.bindTexture(gl.TEXTURE_2D, cellTexture);
+                gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8UI, N, N, 0, gl.RED_INTEGER, gl.UNSIGNED_BYTE, cells);
+            } else {
+                gl.bindTexture(gl.TEXTURE_2D, stages[stageIdx - 1].out.texture);
+            }
 
-        gl.bindVertexArray(vao);
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, fbTextures[1]);
-
-        gl.drawArrays(gl.TRIANGLE_FAN, 0, 4);
-
-
+            gl.drawArrays(gl.TRIANGLE_FAN, 0, 4);
+        }
 
         requestAnimationFrame(render);
     }

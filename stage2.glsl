@@ -2,7 +2,7 @@
 
 precision mediump float;
 
-uniform sampler2D renderTexture;
+uniform sampler2D stageIn;
 uniform float timestamp;
 in vec2 screenCoord;
 out vec4 fragColor;
@@ -39,7 +39,7 @@ void main() {
         discard;
     }
 
-    vec3 color = texture(renderTexture, coord).rgb;
+    vec3 color = texture(stageIn, coord).rgb;
 
     if (timestamp < 0.15) {
         // first 150ms are a transition with pure noise
