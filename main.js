@@ -12,7 +12,7 @@ let head, tail;
 let gameOver = false;
 let appleEatenTimestamp = 0;
 
-// direction vector is updated in tick() while keydown() only appends to nextDirections allowing
+// direction vector is updated in tick() while onKeydown() only appends to nextDirections allowing
 // to queue up tight turns
 let direction = [-1, 0];
 let nextDirections = [];
@@ -172,7 +172,7 @@ let tick = function() {
     }
 }
 
-let keydown = function(event) {
+let onKeydown = function(event) {
     const KEY_DIR = {
         'ArrowUp': [0, 1],
         'ArrowDown': [0, -1],
@@ -182,6 +182,29 @@ let keydown = function(event) {
     let dir = KEY_DIR[event.key];
     if (dir && nextDirections.length < 5) {
         nextDirections.push(dir);
+    }
+}
+
+let onClick = function(event) {
+    const canvas = document.getElementById('glCanvas');
+    const rect = canvas.getBoundingClientRect();
+
+    if (direction[0] === 0) {
+        // snake is moving vertically, turn left or right depending on the click position
+        const headX = rect.left + (head[0] / N) * rect.width;
+        if (event.clientX < headX) {
+            nextDirections.push([-1, 0]);
+        } else {
+            nextDirections.push([1, 0]);
+        }
+    } else {
+        // snake is moving horizontally, turn up or down depending on the click position
+        const headY = rect.bottom - (head[1] / N) * rect.height;
+        if (event.clientY < headY) {
+            nextDirections.push([0, 1]);
+        } else {
+            nextDirections.push([0, -1]);
+        }
     }
 }
 
@@ -324,7 +347,8 @@ let onload = function() {
 
     requestAnimationFrame(render);
     setInterval(tick, 100);
-    document.addEventListener('keydown', keydown);
+    document.addEventListener('keydown', onKeydown);
+    document.addEventListener('click', onClick);
 }
 
 window.onload = onload;
