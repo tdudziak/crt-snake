@@ -1,15 +1,4 @@
-const vertexShaderSource = `#version 300 es
-    in vec2 position;
-    in vec2 texcoord;
-    out vec2 screenCoord;
-    void main() {
-        gl_Position = vec4(position, 0.0, 1.0);
-        screenCoord = texcoord;
-    }
-`;
-import fragmentShader1Source from './stage1.glsl?raw';
-import fragmentShader2Source from './stage2.glsl?raw';
-import fragmentShaderBloomSource from './bloom.glsl?raw';
+import {initShaders} from './shaders.js';
 
 const N = 32; // playfield size
 const START_COIL = 4; // corresponds to the starting length of the snake
@@ -138,33 +127,6 @@ let initCells = function() {
     placeNewApple();
 }
 
-let createShaderProgram = function(gl, vertexSource, fragmentSource) {
-    let compileShader = function(gl, type, source) {
-        const shader = gl.createShader(type);
-        gl.shaderSource(shader, source);
-        gl.compileShader(shader);
-        if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-            console.error('Shader compilation error:', gl.getShaderInfoLog(shader));
-            gl.deleteShader(shader);
-            return null;
-        }
-        return shader;
-    }
-    const vertexShader = compileShader(gl, gl.VERTEX_SHADER, vertexSource);
-    const fragmentShader = compileShader(gl, gl.FRAGMENT_SHADER, fragmentSource);
-    const program = gl.createProgram();
-    gl.attachShader(program, vertexShader);
-    gl.attachShader(program, fragmentShader);
-    gl.linkProgram(program);
-    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-        console.error('Program linking error:', gl.getProgramInfoLog(program));
-        return null;
-    }
-    gl.deleteShader(vertexShader);
-    gl.deleteShader(fragmentShader);
-    return program;
-}
-
 let tick = function() {
     if (gameOver) {
         return;
@@ -232,13 +194,7 @@ let onload = function() {
     }
 
     initCells();
-
-    const shaderStage1 = createShaderProgram(gl, vertexShaderSource, fragmentShader1Source);
-    const shaderStage2 = createShaderProgram(gl, vertexShaderSource, fragmentShader2Source);
-    const shaderBloom = createShaderProgram(gl, vertexShaderSource, fragmentShaderBloomSource);
-    if (!shaderStage1 || !shaderStage2 || !shaderBloom) {
-        return;
-    }
+    const shaders = initShaders(gl);
 
     const vertices = new Float32Array([
         -1.0, -1.0, 0.0, 0.0,
@@ -253,14 +209,6 @@ let onload = function() {
 
     const vao = gl.createVertexArray();
     gl.bindVertexArray(vao);
-
-    const positionLocation = gl.getAttribLocation(shaderStage1, 'position');
-    const texcoordLocation = gl.getAttribLocation(shaderStage1, 'texcoord');
-
-    gl.enableVertexAttribArray(positionLocation);
-    gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 16, 0);
-    gl.enableVertexAttribArray(texcoordLocation);
-    gl.vertexAttribPointer(texcoordLocation, 2, gl.FLOAT, false, 16, 8);
 
     // game state array `cells` passed as texture to the first stage fragment shader
     const cellTexture = gl.createTexture();
@@ -291,25 +239,25 @@ let onload = function() {
     const stages = [
         {
             // first stage: render the game state to a 512x512 texture with no noise or CRT effects
-            shader: shaderStage1,
+            shader: shaders.stage1,
             out: initFramebuffer(N * 8, N * 8),
             uniforms: {},
         },
         {
             // second stage: add CRT shape distortion, scanlines, noise etc.
-            shader: shaderStage2,
+            shader: shaders.stage2,
             out: initFramebuffer(canvas.width, canvas.height),
             uniforms: {},
         },
         {
-            shader: shaderBloom,
+            shader: shaders.bloom,
             out: initFramebuffer(canvas.width, canvas.height),
             uniforms: {
                 bloomAxis: { type: "uniform2fv", value: [1.0, 0.0] },
             },
         },
         {
-            shader: shaderBloom,
+            shader: shaders.bloom,
             out: {
                 framebuffer: null,
                 texture: null,
@@ -353,6 +301,13 @@ let onload = function() {
 
             gl.bindVertexArray(vao);
             gl.activeTexture(gl.TEXTURE0);
+
+            const positionLocation = gl.getAttribLocation(stage.shader, 'position');
+            const texcoordLocation = gl.getAttribLocation(stage.shader, 'texcoord');
+            gl.enableVertexAttribArray(positionLocation);
+            gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 16, 0);
+            gl.enableVertexAttribArray(texcoordLocation);
+            gl.vertexAttribPointer(texcoordLocation, 2, gl.FLOAT, false, 16, 8);
 
             if (stageIdx == 0) {
                 gl.bindTexture(gl.TEXTURE_2D, cellTexture);
