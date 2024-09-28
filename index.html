@@ -12,14 +12,27 @@
             justify-content: center;
             align-items: center;
         }
-        canvas {
+        #glCanvas, #errorMessage {
             display: block;
             margin: 0 auto;
+            width: 90vw;
+            height: 90vw;
+            max-height: 90vh;
+            max-width: 90vh;
+            aspect-ratio: 1 / 1;
+        }
+        #errorMessage {
+            display: none;
+            color: #a00;
+            text-align: center;
+            font-size: 2em;
+            font-family: sans-serif;
         }
     </style>
 </head>
 <body>
-<canvas id="glCanvas" width="700" height="700"></canvas>
-<script type="module" src="/main.js"></script>
+<canvas id="glCanvas" width="500" height="500"></canvas>
+<div id="errorMessage">Looks like something went wrong. Sorry!</div>
+<script type="module" src="./main.js"></script>
 </body>
 </html>

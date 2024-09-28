@@ -1,4 +1,4 @@
-import {initShaders} from './shaders.js';
+import { initShaders } from './shaders.js';
 
 const N = 32; // playfield size
 const START_COIL = 4; // corresponds to the starting length of the snake
@@ -28,7 +28,7 @@ const BM_HORIZONTAL = BM_LEFT | BM_RIGHT | BM_SEG;
 const BM_VERTICAL = BM_TOP | BM_BOT | BM_SEG;
 
 // Converts a 2-element direction vector to one of the BM_* constants. Diagonals are not allowed.
-let dirToBitmask = function(dir) {
+function dirToBitmask(dir) {
     if (dir[0] === 1) {
         return BM_RIGHT;
     } else if (dir[0] === -1) {
@@ -43,7 +43,7 @@ let dirToBitmask = function(dir) {
 
 // Converts a cell bitmask value to a 2-element direction vector. Exactly one of the BM_TOP, BM_BOT,
 // BM_LEFT and BM_RIGHT bits must be set.
-let bitmaskToDir = function(bitmask) {
+function bitmaskToDir(bitmask) {
     let result;
     if (bitmask & BM_TOP) {
         result = [0, 1];
@@ -64,7 +64,7 @@ let bitmaskToDir = function(bitmask) {
     return result;
 }
 
-let placeNewApple = function() {
+function placeNewApple() {
     let x, y;
     do {
         x = Math.floor(Math.random() * N);
@@ -73,7 +73,21 @@ let placeNewApple = function() {
     cells[x + N * y] = BM_APPLE;
 }
 
-let initCells = function() {
+// Wraps event handlers, render functions, and other entry points so that an error message is shown
+// when an exception is thrown.
+function showErrorOnFailure(f) {
+    return function(...args) {
+        try {
+            return f(...args);
+        } catch (e) {
+            console.error(e);
+            document.getElementById('glCanvas').style.display = 'none';
+            document.getElementById('errorMessage').style.display = 'block';
+        }
+    }
+}
+
+function initCells() {
     cells.fill(0);
 
     // initial snake: spiral that starts at the center
@@ -127,7 +141,7 @@ let initCells = function() {
     placeNewApple();
 }
 
-let tick = function() {
+const tick = showErrorOnFailure(function() {
     if (gameOver) {
         return;
     }
@@ -152,7 +166,7 @@ let tick = function() {
     cells[headIdx] = BM_SEG | dirToBitmask([-direction[0], -direction[1]]);
 
     if (frontCell & BM_APPLE) {
-        appleEatenTimestamp = performance.now();
+        appleEatenTimestamp = document.timeline.currentTime;
         placeNewApple();
     } else {
         // remove tail segment
@@ -170,9 +184,9 @@ let tick = function() {
         // directional bits
         cells[tailIdx] &= ~dirToBitmask([-tailDir[0], -tailDir[1]]);
     }
-}
+});
 
-let onKeydown = function(event) {
+const onKeydown = showErrorOnFailure(function(event) {
     const KEY_DIR = {
         'ArrowUp': [0, 1],
         'ArrowDown': [0, -1],
@@ -183,9 +197,9 @@ let onKeydown = function(event) {
     if (dir && nextDirections.length < 5) {
         nextDirections.push(dir);
     }
-}
+});
 
-let onClick = function(event) {
+const onClick = showErrorOnFailure(function(event) {
     const canvas = document.getElementById('glCanvas');
     const rect = canvas.getBoundingClientRect();
 
@@ -206,14 +220,13 @@ let onClick = function(event) {
             nextDirections.push([0, -1]);
         }
     }
-}
+});
 
-let onload = function() {
+const onLoad = showErrorOnFailure(function() {
     const canvas = document.getElementById('glCanvas');
     const gl = canvas.getContext('webgl2');
     if (!gl) {
-        console.error('WebGL 2 not supported');
-        return;
+        throw new Error('WebGL 2 not supported');
     }
 
     initCells();
@@ -292,7 +305,7 @@ let onload = function() {
         },
     ];
 
-    function render(timestamp) {
+    const render = showErrorOnFailure(function(timestamp) {
         const relTimestamp = (timestamp - appleEatenTimestamp) / 1000;
         let noiseLevel = 1.0; // max noise for first 100ms
         if (gameOver) {
@@ -343,12 +356,12 @@ let onload = function() {
         }
 
         requestAnimationFrame(render);
-    }
+    });
 
     requestAnimationFrame(render);
     setInterval(tick, 100);
     document.addEventListener('keydown', onKeydown);
     document.addEventListener('click', onClick);
-}
+});
 
-window.onload = onload;
+window.onload = onLoad;
