@@ -1,21 +1,23 @@
 import { initShaders } from './shaders.js';
 
 const N = 32; // playfield size
-const START_COIL = 4; // corresponds to the starting length of the snake
 const TIME_LIMIT = 10; // max noise this many seconds after each score
+const APPLE_GROWTH = 8; // how many segments the snake grows after eating an apple
 
 // array is passed to the fragment shader for rendering; each cell is a bitmask of BM_* values
 // defined below
 let cells = new Uint8Array(N * N);
 
 let head, tail;
-let gameOver = false;
-let appleEatenTimestamp = 0;
+let gameOver;
+let appleEatenTimestamp;
+let pendingGrowth;
+let score;
 
 // direction vector is updated in tick() while onKeydown() only appends to nextDirections allowing
 // to queue up tight turns
-let direction = [-1, 0];
-let nextDirections = [];
+let direction;
+let nextDirections;
 
 const BM_TOP = 1; // snake body or wall connecting upwards
 const BM_BOT = 2; // snake body or wall connecting downwards
@@ -87,46 +89,20 @@ function showErrorOnFailure(f) {
     }
 }
 
-function initCells() {
+function restartGame() {
+    gameOver = false;
+    appleEatenTimestamp = document.timeline.currentTime;
+    pendingGrowth = 0;
+    score = 0;
+    direction = [1, 0];
+    nextDirections = [];
     cells.fill(0);
 
     // initial snake: spiral that starts at the center
-    tail = [15, 15];
+    tail = [Math.floor(N / 2), Math.floor(N / 2)];
     cells[tail[0] + N * tail[1]] = BM_SEG | BM_RIGHT;
-    let p = [16, 15];
-    cells[p[0] + N * p[1]] = BM_SEG | BM_LEFT | BM_BOT;
-    p[1]--;
-    cells[p[0] + N * p[1]] = BM_SEG | BM_TOP | BM_LEFT;
-    let steps = 2; // size of the current layer of the spiral
-    for (let layer = 0; layer < START_COIL; ++layer) {
-        for (let i = 0; i < steps - 1; ++i) {
-            p[0]--;
-            cells[p[0] + N * p[1]] = BM_HORIZONTAL;
-        }
-        p[0]--;
-        cells[p[0] + N * p[1]] = BM_SEG | BM_RIGHT | BM_TOP;
-        for (let i = 0; i < steps - 1; ++i) {
-            p[1]++;
-            cells[p[0] + N * p[1]] = BM_VERTICAL;
-        }
-        p[1]++;
-        cells[p[0] + N * p[1]] = BM_SEG | BM_BOT | BM_RIGHT;
-        steps++;
-        for (let i = 0; i < steps - 1; ++i) {
-            p[0]++;
-            cells[p[0] + N * p[1]] = BM_HORIZONTAL;
-        }
-        p[0]++;
-        cells[p[0] + N * p[1]] = BM_SEG | BM_LEFT | BM_BOT;
-        for (let i = 0; i < steps - 1; ++i) {
-            p[1]--;
-            cells[p[0] + N * p[1]] = BM_VERTICAL;
-        }
-        p[1]--;
-        cells[p[0] + N * p[1]] = BM_SEG | BM_TOP | BM_LEFT;
-        steps++;
-    }
-    head = p;
+    head = [tail[0] + 1, tail[1]];
+    cells[head[0] + N * head[1]] = BM_SEG | BM_LEFT;
 
     // walls around the playfield
     for (let i = 0; i < N; i++) {
@@ -139,6 +115,27 @@ function initCells() {
     cells[N * N - 1] = BM_BOT | BM_LEFT | BM_SEG;
 
     placeNewApple();
+}
+
+function drawGameOverScreen() {
+    const nonglCanvas = document.getElementById('nonglCanvas');
+    const textCtx = nonglCanvas.getContext('2d');
+    const width = nonglCanvas.width;
+    const height = nonglCanvas.height;
+
+    textCtx.clearRect(0, 0, width, height);
+
+    textCtx.fillStyle = 'rgba(0, 0, 0, 0.9)';
+    textCtx.fillRect(0, 25, width, 26);
+    textCtx.fillRect(0, 69, width, 21);
+
+    textCtx.font = '20px monospace';
+    textCtx.fillStyle = 'white';
+    textCtx.textAlign = 'center';
+    textCtx.textBaseline = 'middle';
+    textCtx.fillText('GAME OVER', width / 2, 40);
+    textCtx.font = '16px monospace';
+    textCtx.fillText(`SCORE: ${score}`, width / 2, 80);
 }
 
 const tick = showErrorOnFailure(function() {
@@ -161,6 +158,7 @@ const tick = showErrorOnFailure(function() {
     let frontCell = cells[headIdx];
     if (frontCell & BM_SEG) {
         gameOver = true;
+        drawGameOverScreen();
         return;
     }
     cells[headIdx] = BM_SEG | dirToBitmask([-direction[0], -direction[1]]);
@@ -168,6 +166,12 @@ const tick = showErrorOnFailure(function() {
     if (frontCell & BM_APPLE) {
         appleEatenTimestamp = document.timeline.currentTime;
         placeNewApple();
+        pendingGrowth += APPLE_GROWTH;
+        score += APPLE_GROWTH;
+    }
+
+    if (pendingGrowth > 0) {
+        pendingGrowth--;
     } else {
         // remove tail segment
         let tailIdx = tail[0] + N * tail[1];
@@ -187,6 +191,9 @@ const tick = showErrorOnFailure(function() {
 });
 
 const onKeydown = showErrorOnFailure(function(event) {
+    if (event.key === 'R') {
+        restartGame();
+    }
     const KEY_DIR = {
         'ArrowUp': [0, 1],
         'ArrowDown': [0, -1],
@@ -229,7 +236,8 @@ const onLoad = showErrorOnFailure(function() {
         throw new Error('WebGL 2 not supported');
     }
 
-    initCells();
+    restartGame();
+    drawGameOverScreen();
     const shaders = initShaders(gl);
 
     const vertices = new Float32Array([
@@ -249,6 +257,14 @@ const onLoad = showErrorOnFailure(function() {
     // game state array `cells` passed as texture to the first stage fragment shader
     const cellTexture = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, cellTexture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+    // text overlay prepared in the nonglCanvas
+    const overlayTexture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, overlayTexture);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -274,9 +290,9 @@ const onLoad = showErrorOnFailure(function() {
 
     const stages = [
         {
-            // first stage: render the game state to a 512x512 texture with no noise or CRT effects
+            // first stage: render the game state to a 256x256 texture with no noise or CRT effects
             shader: shaders.stage1,
-            out: initFramebuffer(N * 8, N * 8),
+            out: initFramebuffer(256, 256),
             uniforms: {},
         },
         {
@@ -328,9 +344,11 @@ const onLoad = showErrorOnFailure(function() {
             // set up the shader program
             gl.useProgram(stage.shader);
             gl.uniform1i(gl.getUniformLocation(stage.shader, 'stageIn'), 0);
+            gl.uniform1i(gl.getUniformLocation(stage.shader, 'overlay'), 1);
             gl.uniform1i(gl.getUniformLocation(stage.shader, 'N'), N);
             gl.uniform1f(gl.getUniformLocation(stage.shader, 'timestamp'), timestamp / 1000);
             gl.uniform1f(gl.getUniformLocation(stage.shader, 'noiseLevel'), noiseLevel);
+            gl.uniform1i(gl.getUniformLocation(stage.shader, 'gameOver'), gameOver);
             for (const [name, { type, value }] of Object.entries(stage.uniforms)) {
                 gl[type](gl.getUniformLocation(stage.shader, name), value);
             }
@@ -346,9 +364,14 @@ const onLoad = showErrorOnFailure(function() {
             gl.vertexAttribPointer(texcoordLocation, 2, gl.FLOAT, false, 16, 8);
 
             if (stageIdx == 0) {
+                gl.activeTexture(gl.TEXTURE0);
                 gl.bindTexture(gl.TEXTURE_2D, cellTexture);
                 gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8UI, N, N, 0, gl.RED_INTEGER, gl.UNSIGNED_BYTE, cells);
+                gl.activeTexture(gl.TEXTURE1);
+                gl.bindTexture(gl.TEXTURE_2D, overlayTexture);
+                gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, nonglCanvas);
             } else {
+                gl.activeTexture(gl.TEXTURE0);
                 gl.bindTexture(gl.TEXTURE_2D, stages[stageIdx - 1].out.texture);
             }
 

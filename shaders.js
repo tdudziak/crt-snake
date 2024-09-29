@@ -20,6 +20,7 @@ precision mediump usampler2D;
 uniform int N;
 uniform float timestamp;
 uniform float noiseLevel;
+uniform bool gameOver;
 
 in vec2 screenCoord;
 out vec4 fragColor;
@@ -74,6 +75,8 @@ function createProgram(fragmentSource) {
 
 const stage1 = createProgram(`
 uniform usampler2D stageIn;
+uniform sampler2D overlay;
+
 const vec2 NARROW = vec2(0.3, 0.7);
 const vec2 WIDE = vec2(0.2, 0.8);
 
@@ -106,6 +109,12 @@ void main() {
     } else {
         float value = mix(float(pix_set), whiteNoise(vec3(screenCoord.xy, timestamp)), noiseLevel);
         fragColor = vec4(value);
+    }
+
+    if (gameOver) {
+        // apply overlay with the game over message
+        vec4 overlayValue = texture(overlay, vec2(screenCoord.x, 1.0 - screenCoord.y));
+        fragColor.rgb = mix(fragColor.rgb, overlayValue.rgb, overlayValue.a);
     }
 }
 `);
