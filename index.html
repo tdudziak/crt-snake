@@ -11,15 +11,18 @@
             display: flex;
             justify-content: center;
             align-items: center;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
         }
         #glCanvas, #errorMessage {
             display: block;
-            margin: 0 auto;
-            width: 90vw;
-            height: 90vw;
-            max-height: 90vh;
-            max-width: 90vh;
+            width: 100%;
+            height: 100%;
+            max-height: min(90vmin, 800px);
+            max-width: min(90vmin, 800px);
             aspect-ratio: 1 / 1;
+            object-fit: contain;
         }
         #errorMessage {
             display: none;
