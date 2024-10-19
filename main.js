@@ -2,7 +2,7 @@ import { initShaders } from './shaders.js';
 
 const N = 32; // playfield size
 const TIME_LIMIT = 10; // max noise this many seconds after each score
-const APPLE_GROWTH = 8; // how many segments the snake grows after eating an apple
+const GROWTH_RATIO = 1.4; // how much the snake grows after eating an apple
 
 // array is passed to the fragment shader for rendering; each cell is a bitmask of BM_* values
 // defined below
@@ -11,8 +11,7 @@ let cells = new Uint8Array(N * N);
 let head, tail;
 let gameOver;
 let appleEatenTimestamp;
-let pendingGrowth;
-let score;
+let pendingGrowth, currentLength;
 
 // direction vector is updated in tick() while onKeydown() only appends to nextDirections allowing
 // to queue up tight turns
@@ -93,7 +92,7 @@ function restartGame() {
     gameOver = false;
     appleEatenTimestamp = document.timeline.currentTime;
     pendingGrowth = 0;
-    score = 0;
+    currentLength = 2;
     direction = [1, 0];
     nextDirections = [];
     cells.fill(0);
@@ -135,6 +134,10 @@ function drawGameOverScreen() {
     textCtx.textBaseline = 'middle';
     textCtx.fillText('GAME OVER', width / 2, 40);
     textCtx.font = '16px monospace';
+
+    // score is close to currentLength since N * N is normally 1024 but we normalize it to the
+    // rounder maximal value of 1000
+    const score = Math.round(1000.0 * currentLength / (N * N));
     textCtx.fillText(`SCORE: ${score}`, width / 2, 80);
 }
 
@@ -166,12 +169,13 @@ const tick = showErrorOnFailure(function() {
     if (frontCell & BM_APPLE) {
         appleEatenTimestamp = document.timeline.currentTime;
         placeNewApple();
-        pendingGrowth += APPLE_GROWTH;
-        score += APPLE_GROWTH;
+        const newLength = Math.ceil(currentLength * GROWTH_RATIO);
+        pendingGrowth += (newLength - currentLength);
     }
 
     if (pendingGrowth > 0) {
         pendingGrowth--;
+        currentLength++;
     } else {
         // remove tail segment
         let tailIdx = tail[0] + N * tail[1];
