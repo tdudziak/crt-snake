@@ -65,12 +65,76 @@ function bitmaskToDir(bitmask) {
     return result;
 }
 
+function wallDistance(x, y) {
+    let visited = new Uint8Array(N * N);
+    let queue = [[x, y, 0]];
+    while (queue.length > 0) {
+        const [x, y, d] = queue.shift();
+        const idx = x + N * y;
+        visited[idx] = 1;
+        if (cells[idx] != 0) {
+            return d;
+        }
+        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+            const nx = x + dx;
+            const ny = y + dy;
+            const nidx = nx + N * ny;
+            if (nx >= 0 && nx < N && ny >= 0 && ny < N && !visited[nidx]) {
+                queue.push([nx, ny, d + 1]);
+            }
+        }
+    }
+    return Infinity;
+}
+
+function reachableCells() {
+    let result = []
+    let visited = new Uint8Array(N * N);
+    let queue = [head];
+    while (queue.length > 0) {
+        const [x, y] = queue.shift();
+        const idx = x + N * y;
+        if (visited[idx]) {
+            continue;
+        }
+        visited[idx] = 1;
+        result.push([x, y]);
+        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+            const nx = x + dx;
+            const ny = y + dy;
+            if (nx < 0 || nx >= N || ny < 0 || ny >= N) {
+                continue;
+            }
+            const nidx = nx + N * ny;
+            if (visited[nidx] || cells[nidx] != 0) {
+                continue;
+            }
+            queue.push([nx, ny]);
+        }
+    }
+    return result;
+}
+
 function placeNewApple() {
-    let x, y;
-    do {
-        x = Math.floor(Math.random() * N);
-        y = Math.floor(Math.random() * N);
-    } while (cells[x + N * y] !== 0);
+    const reachable = reachableCells();
+    if (reachable.length < pendingGrowth + 5) {
+        // not many reachable free cells left, game will be over soon anyway
+        return;
+    }
+
+    // try to find a random free cell away from any obstacles
+    let [x, y] = reachable[0];
+    let distance = 0;
+    for (let i = 0; i < 7; ++i) {
+        const [nx, ny] = reachable[Math.floor(Math.random() * reachable.length)];
+        const nd = wallDistance(nx, ny);
+        if (nd > distance) {
+            distance = nd;
+            x = nx;
+            y = ny;
+        }
+    }
+
     cells[x + N * y] = BM_APPLE;
 }
 
